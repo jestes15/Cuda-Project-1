@@ -13,6 +13,12 @@
 #include <math.h>
 #include <string.h>
 
+// Inclusion if headers from the C++ STL
+#include <iostream>
+#include <string>
+using std::cout;
+using std::endl;
+
 #define CURAND_RNG_NON_DEFAULT 24
 
 // Windows implementation of the Linux sys/time.h fnuctions needed in this program
@@ -63,9 +69,8 @@ clock_t times(struct tms* __buffer) {
 typedef long long suseconds_t;
 
 // CUDA error check to get error name
-const char * CUDA_CHECK_VAL(cudaError_t x) {
-    size_t size = 50 * sizeof('a');
-    const char* msg = (char*)malloc(size);
+std::string CUDA_CHECK_VAL(cudaError_t x) {
+    std::string msg;
 
     switch (x) {
     case 0:
@@ -279,9 +284,8 @@ const char * CUDA_CHECK_VAL(cudaError_t x) {
 }
 
 // CURAND error check to get error name
-const char * CURAND_CHECK_VAL(curandStatus_t x) {
-    size_t size = 50 * sizeof('a');
-    const char* msg = (char*)malloc(size);
+std::string CURAND_CHECK_VAL(curandStatus_t x) {
+    std::string msg;
 
     switch (x) {
     case 0:
@@ -317,10 +321,10 @@ const char * CURAND_CHECK_VAL(curandStatus_t x) {
 }
 
 // Check method for checking the error status of a CUDA call
-#define CUDA_CALL(x) { if(x != cudaSuccess){ sprintf("Error: %s at %s:%d\n", CUDA_CHECK_VAL(x), __FILE__, __LINE__); return EXIT_FAILURE;}}
+#define CUDA_CALL(x) { if(x != cudaSuccess){ cout << "Error: " << CUDA_CHECK_VAL(x) << " at " << __FILE__ << ":" << __LINE__ << endl; return EXIT_FAILURE;}}
 
 // Check method for checking the error status of a cuRAND call
-#define CURAND_CALL(x) {if(x != CURAND_STATUS_SUCCESS){ sprintf("Error: %s at %s:%d\n", CURAND_CHECK_VAL(x), __FILE__, __LINE__); return EXIT_FAILURE;}}
+#define CURAND_CALL(x) {if(x != CURAND_STATUS_SUCCESS){ cout << "Error: " << CURAND_CHECK_VAL(x) << " at " << __FILE__ << ":" << __LINE__ << endl; return EXIT_FAILURE;}}
 
 // The kernel, which runs on the GPU when called
 __global__ void kernel(int* a, int* b, int* c, size_t N)
@@ -364,7 +368,7 @@ __host__ double cpuSecond()
 
 // Entry point to the program
 int main(void) {
-    size_t nElem = 1 << 24;
+    size_t nElem = 1 << 28;
     size_t nBytes = nElem * sizeof(int);
     size_t nBytesF = nElem * sizeof(float);
 
@@ -420,7 +424,7 @@ int main(void) {
     CUDA_CALL(cudaMemcpy(d_B, h_B, nBytes, cudaMemcpyHostToDevice));
 
     // Calculate block indices
-    int iLen = 1024;
+    int iLen = 1 << 256;
     dim3 block(iLen, 1);
     dim3 grid((nElem + block.x - 1) / block.x, 1);
 
@@ -436,7 +440,7 @@ int main(void) {
     // Verification function that the kernel on the GPU is performing properly
     double iStartCPU = cpuSecond();
     KernelCPUEd(h_A, h_B, h_C, nElem);
-    double iEndCPU = cpuSecond() - iStart;
+    double iEndCPU = cpuSecond() - iStartCPU;
     printf("Execution time of the CPU function %g\n", iEndCPU);
 
     // Transfer of data from Device to the host
