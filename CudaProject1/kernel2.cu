@@ -21,6 +21,7 @@ using std::endl;
 
 #define CURAND_RNG_NON_DEFAULT 24
 
+#if _WIN32
 // Windows implementation of the Linux sys/time.h fnuctions needed in this program
 #include <sys/timeb.h>
 #include <sys/types.h>
@@ -67,7 +68,9 @@ clock_t times(struct tms* __buffer) {
     return __buffer->tms_utime;
 }
 typedef long long suseconds_t;
-
+#else
+#include <sys/time.h>
+#endif
 // CUDA error check to get error name
 std::string CUDA_CHECK_VAL(cudaError_t x) {
     std::string msg;
@@ -424,7 +427,7 @@ int main(void) {
     CUDA_CALL(cudaMemcpy(d_B, h_B, nBytes, cudaMemcpyHostToDevice));
 
     // Calculate block indices
-    int iLen = 1 << 256;
+    int iLen = 1 << 8;
     dim3 block(iLen, 1);
     dim3 grid((nElem + block.x - 1) / block.x, 1);
 
