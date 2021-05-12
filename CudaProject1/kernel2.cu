@@ -8,10 +8,12 @@
 
 // Inclusion of headers from the standard library in C
 #include <stdio.h>
+#include <stdint.h> //uint32_t
 #include <stdlib.h>
 #include <time.h>
 #include <math.h>
 #include <string.h>
+
 
 // Inclusion if headers from the C++ STL
 #include <iostream>
@@ -71,6 +73,46 @@ typedef long long suseconds_t;
 #else
 #include <sys/time.h>
 #endif
+
+// Q_SQRT function using C
+float Q_rsqrt(float num)
+{
+    long longVal;
+    float floatOne = num * 0.5F, floatTwo = num;
+    const float frac = 1.5F;
+
+    longVal = *(long*)&floatTwo;
+    longVal = 0x5f3759df - (longVal >> 1); // Bit shift manipulation to get an approximation for 1/sqrt(num)
+    floatTwo = *(float*)&longVal;
+
+    floatTwo = floatTwo * (frac - (floatOne * floatTwo * floatTwo)); // Newton's Method for finding value of roots
+    floatTwo = floatTwo * (frac - (floatOne * floatTwo * floatTwo));
+    floatTwo = floatTwo * (frac - (floatOne * floatTwo * floatTwo)); // Final iteration to arrive at near 99% accuracy of 1/sqrt(num)
+
+    return floatTwo;
+}
+
+// Error codes for any error thrown in the next function
+enum QuickInverseSqrtError_t {
+    QRSqrtSuccess = 0,
+    ArrayOutOfBoundsException = 1,
+    DivideByZero = 2,
+    UnknownError = 3,
+    NDoesNotMatchSizeOfArray = 4
+};
+
+// Run Q_rsqrt over an array
+QuickInverseSqrtError_t calcOverArray(float* array, size_t N) {
+    int size = sizeof(*array) / sizeof(array[0]);
+    if (size != N) return NDoesNotMatchSizeOfArray;
+
+    for (int i = 0; i < N; i++) {
+        if (array[i] == 0) return DivideByZero;
+        array[i] = Q_rsqrt(array[i]);
+    }
+    return QRSqrtSuccess;
+}
+
 // CUDA error check to get error name
 std::string CUDA_CHECK_VAL(cudaError_t x) {
     std::string msg;
@@ -334,7 +376,12 @@ __global__ void kernel(int* a, int* b, int* c, size_t N)
 {
     unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (idx < N) c[idx] = a[idx] * b[idx];
+    if (idx < N) c[idx] = __fmul_rn(a[idx], b[idx]);
+}
+
+__global__ void makeFloatLarger(float* a, size_t N) {
+    unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) a[idx] *= 100;
 }
 
 // Function for generating the same results as the GPU kernel, used for verification of results
@@ -371,6 +418,31 @@ __host__ double cpuSecond()
 
 // Entry point to the program
 int main(void) {
+    float* a, * b, * devA;
+    curandGenerator_t test;
+    size_t nSize = 50 * sizeof(float);
+    a = (float*)malloc(nSize);
+    b = (float*)malloc(nSize);
+    CUDA_CALL(cudaMalloc((float**)&devA, nSize));
+    CURAND_CALL(curandCreateGenerator(&test, CURAND_RNG_PSEUDO_DEFAULT));
+    CURAND_CALL(curandSetPseudoRandomGeneratorSeed(test, time(NULL)));
+    CURAND_CALL(curandGenerateUniform(test, devA, 50));
+    makeFloatLarger <<<1, 50>>> (devA, nSize);
+    CUDA_CALL(cudaDeviceSynchronize());
+    CUDA_CALL(cudaMemcpy(a, devA, nSize, cudaMemcpyDeviceToHost));
+    memcpy(b, a, nSize);
+    if (memcmp(a, b, nSize) == 0) {
+        for (int i = 0; i < 50; i++)
+            cout << Q_rsqrt(a[i]) << " = " << 1 / std::sqrt(b[i]) << endl;
+    }
+    else
+        printf("Error, arrays are not the same");
+
+    CURAND_CALL(curandDestroyGenerator(test));
+    CUDA_CALL(cudaFree(devA));
+    free(a);
+    free(b);
+
     size_t nElem = 1 << 28;
     size_t nBytes = nElem * sizeof(int);
     size_t nBytesF = nElem * sizeof(float);
@@ -479,9 +551,9 @@ Exit:
     free(h_BR);
 
     // Allows for the user to see the output when running in Visual Studio Pro 2019 (v142)
-    char a;
+    char end;
     printf("Press Enter to continue");
-    scanf("%c", &a);
+    scanf("%c", &end);
 
     return 0;
 }
