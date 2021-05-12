@@ -18,6 +18,8 @@
 // Inclusion if headers from the C++ STL
 #include <iostream>
 #include <string>
+#include <thread>
+
 using std::cout;
 using std::endl;
 
@@ -75,21 +77,21 @@ typedef long long suseconds_t;
 #endif
 
 // Q_SQRT function using C
-float Q_rsqrt(float num)
+float Q_rsqrt(float number)
 {
-    long longVal;
-    float floatOne = num * 0.5F, floatTwo = num;
-    const float frac = 1.5F;
+    const float x2 = number * 0.5F;
+    const float threehalfs = 1.5F;
 
-    longVal = *(long*)&floatTwo;
-    longVal = 0x5f3759df - (longVal >> 1); // Bit shift manipulation to get an approximation for 1/sqrt(num)
-    floatTwo = *(float*)&longVal;
-
-    floatTwo = floatTwo * (frac - (floatOne * floatTwo * floatTwo)); // Newton's Method for finding value of roots
-    floatTwo = floatTwo * (frac - (floatOne * floatTwo * floatTwo));
-    floatTwo = floatTwo * (frac - (floatOne * floatTwo * floatTwo)); // Final iteration to arrive at near 99% accuracy of 1/sqrt(num)
-
-    return floatTwo;
+    union {
+        float f;
+        uint32_t i;
+    } conv;
+    conv.f = number;
+    conv.i = 0x5f3759df - (conv.i >> 1);
+    conv.f *= threehalfs - (x2 * conv.f * conv.f);
+    conv.f *= threehalfs - (x2 * conv.f * conv.f);
+    conv.f *= threehalfs - (x2 * conv.f * conv.f);
+    return conv.f;
 }
 
 // Error codes for any error thrown in the next function
@@ -384,13 +386,6 @@ __global__ void makeFloatLarger(float* a, size_t N) {
     if (idx < N) a[idx] *= 100;
 }
 
-// Function for generating the same results as the GPU kernel, used for verification of results
-__host__ void KernelCPUEd(int* a, int* b, int* c, size_t size)
-{
-    for (int i = 0; i < size; i++)
-        c[i] = a[i] * b[i];
-}
-
 // Program to convert a float array to an integer array
 __host__ void FtoIArray(int* dst, float* src, size_t nElem) {
     for (int i = 0; i < nElem; i++)
@@ -416,8 +411,7 @@ __host__ double cpuSecond()
     return ((double)tp.tv_sec + (double)tp.tv_usec * 1.e-6);
 }
 
-// Entry point to the program
-int main(void) {
+int arrayPlay() {
     float* a, * b, * devA;
     curandGenerator_t test;
     size_t nSize = 50 * sizeof(float);
@@ -427,7 +421,7 @@ int main(void) {
     CURAND_CALL(curandCreateGenerator(&test, CURAND_RNG_PSEUDO_DEFAULT));
     CURAND_CALL(curandSetPseudoRandomGeneratorSeed(test, time(NULL)));
     CURAND_CALL(curandGenerateUniform(test, devA, 50));
-    makeFloatLarger <<<1, 50>>> (devA, nSize);
+    makeFloatLarger << <1, 50 >> > (devA, nSize);
     CUDA_CALL(cudaDeviceSynchronize());
     CUDA_CALL(cudaMemcpy(a, devA, nSize, cudaMemcpyDeviceToHost));
     memcpy(b, a, nSize);
@@ -442,8 +436,67 @@ int main(void) {
     CUDA_CALL(cudaFree(devA));
     free(a);
     free(b);
+}
 
+// Function for generating the same results as the GPU kernel, used for verification of results
+// TODO Implement this for multithreading using std::thread
+__host__ void KernelCPUEd(int* a, int* b, int* c, size_t begin, size_t end)
+{
+    for (int i = begin; i < end; i++)
+        c[i] = a[i] * b[i];
+}
+
+void getBounds(int* a, int* b, int* c, size_t nElem) {
+
+    struct data {
+        struct partitionOne {
+            int begin;
+            int end;
+        } One;
+        struct partitionTwo {
+            int begin;
+            int end;
+        } Two;
+        struct partitionThree {
+            int begin;
+            int end;
+        } Three;
+        struct partitionFour {
+            int begin;
+            int end;
+        } Four;
+    } Data;
+
+    int partitionSize = nElem / 4;
+    Data.One.begin = 0;
+    Data.One.end = (1 << (int)log2(partitionSize)) - 1;
+
+    Data.Two.begin = Data.One.end + 1;
+    Data.Two.end = Data.Two.begin + partitionSize - 1;
+
+    Data.Three.begin = Data.Two.end + 1;
+    Data.Three.end = Data.Three.begin + partitionSize - 1;
+
+    Data.Four.begin = Data.Three.end + 1;
+    Data.Four.end = Data.Four.begin + partitionSize - 1;
+
+    std::thread partitionOne(KernelCPUEd, a, b, c, Data.One.begin, Data.One.end);
+    std::thread partitionTwo(KernelCPUEd, a, b, c, Data.Two.begin, Data.Two.end);
+    std::thread partitionThree(KernelCPUEd, a, b, c, Data.Three.begin, Data.Three.end);
+    std::thread partitionFour(KernelCPUEd, a, b, c, Data.Three.begin, Data.Three.end);
+
+    partitionOne.join();
+    partitionTwo.join();
+    partitionThree.join();
+    partitionFour.join();
+
+
+}
+
+// Entry point to the program
+int main(void) {
     size_t nElem = 1 << 28;
+
     size_t nBytes = nElem * sizeof(int);
     size_t nBytesF = nElem * sizeof(float);
 
@@ -514,7 +567,8 @@ int main(void) {
 
     // Verification function that the kernel on the GPU is performing properly
     double iStartCPU = cpuSecond();
-    KernelCPUEd(h_A, h_B, h_C, nElem);
+    getBounds(h_A, h_B, h_C, nElem);
+    //KernelCPUEd(h_A, h_B, h_C, nElem);
     double iEndCPU = cpuSecond() - iStartCPU;
     printf("Execution time of the CPU function %g\n", iEndCPU);
 
